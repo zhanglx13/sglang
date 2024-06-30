@@ -30,7 +30,7 @@ def generate_unique_prefix(base_text, index):
 
 
 @sgl.function
-def text_qa(s, question, gen_len=8):
+def text_qa(s, question, gen_len):
     s += "Q: " + question + "\n"
     s += "A:" + sgl.gen("answer", stop="\n", temperature=0, max_tokens=gen_len)
 
@@ -47,7 +47,7 @@ def prepare_prompts(num_prefix, num_samples_per_prefix, prefix_length, suffix_le
         for j in range(num_samples_per_prefix):
             suffix = generate_random_string(suffix_length)
             prompt = unique_prefix + suffix
-            prompt_list.append({"question": prompt})
+            prompt_list.append(prompt)
             tot_input_len += len(tokenizer.encode(prompt))
         all_prompts.append(prompt_list)
     return all_prompts, tot_input_len
@@ -59,7 +59,7 @@ def test_prefix_caching(all_prompts, num_prefix, num_samples_per_prefix, gen_len
     for i in tqdm(range(num_prefix), desc="prefix batches"):
         tic = time.time()
         output = text_qa.run_batch(
-            all_prompts[i],
+            list(zip(all_prompts[i], [gen_len] * len(all_prompts[i]))),
             progress_bar=False
         )
         tot_time += time.time() - tic
@@ -80,9 +80,11 @@ def test_prefix_caching_hint(all_prompts, num_prefix, num_samples_per_prefix, ge
     tot_output_len = 0
     for i in tqdm(range(num_prefix), desc="prefix batches"):
         tic = time.time()
-        text_qa.run_batch(all_prompts[i][:1])
+        text_qa.run_batch(
+            list(zip(all_prompts[i][:1], [gen_len])),
+        )
         output = text_qa.run_batch(
-            all_prompts[i],
+            list(zip(all_prompts[i], [gen_len] * len(all_prompts[i]))),
             progress_bar=False
         )
         tot_time += time.time() - tic
@@ -104,7 +106,7 @@ def test_prefix_caching_send_all(all_prompts, num_prefix, num_samples_per_prefix
     # run
     tic = time.time()
     output = text_qa.run_batch(
-        all_prompts,
+        list(zip(all_prompts, [gen_len] * len(all_prompts))),
         progress_bar=True
     )
     tot_time = time.time() - tic
@@ -128,14 +130,17 @@ if __name__ == "__main__":
     set_default_backend(backend)
     
     random.seed(0)
-    num_prefix = 2
+    num_prefix = 10
     num_samples_per_prefix = 32
-    prefix_length = 1000
+    prefix_length = 500
     suffix_length = 100
-    gen_len = 8
+    gen_len = 1
     all_prompts, tot_input_len = prepare_prompts(num_prefix, num_samples_per_prefix, prefix_length, suffix_length)
     print(f"Total input token length: {tot_input_len}")
 
+    backend.flush_cache()
     test_prefix_caching(all_prompts, num_prefix, num_samples_per_prefix, gen_len)
+    backend.flush_cache()
     test_prefix_caching_hint(all_prompts, num_prefix, num_samples_per_prefix, gen_len)
+    backend.flush_cache()
     test_prefix_caching_send_all(all_prompts, num_prefix, num_samples_per_prefix, gen_len)
