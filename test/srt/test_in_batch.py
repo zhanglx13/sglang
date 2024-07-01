@@ -132,15 +132,15 @@ if __name__ == "__main__":
     random.seed(0)
     num_prefix = 10
     num_samples_per_prefix = 32
-    prefix_length = 500
-    suffix_length = 100
+    prefix_length = 0
+    suffix_length = 2048
     gen_len = 1
     all_prompts, tot_input_len = prepare_prompts(num_prefix, num_samples_per_prefix, prefix_length, suffix_length)
     print(f"Total input token length: {tot_input_len}")
 
-    backend.flush_cache()
-    test_prefix_caching(all_prompts, num_prefix, num_samples_per_prefix, gen_len)
-    backend.flush_cache()
-    test_prefix_caching_hint(all_prompts, num_prefix, num_samples_per_prefix, gen_len)
+    # backend.flush_cache()
+    # test_prefix_caching(all_prompts, num_prefix, num_samples_per_prefix, gen_len)
+    # backend.flush_cache()
+    # test_prefix_caching_hint(all_prompts, num_prefix, num_samples_per_prefix, gen_len)
     backend.flush_cache()
     test_prefix_caching_send_all(all_prompts, num_prefix, num_samples_per_prefix, gen_len)
