@@ -224,6 +224,7 @@ class ModelLoader:
 
             def apply_quant_method(module):
                 quant_method = getattr(module, "quant_method", None)
+                print("quant_method", quant_method)
                 if quant_method is not None:
                     # print("before apply quant", module.weight, module.weight.dtype)
                     quant_method.process_weights_after_loading(module)

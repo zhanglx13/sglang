@@ -19,7 +19,7 @@ from torch import nn
 from tqdm.auto import tqdm
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME
 from vllm.config import LoadConfig, ModelConfig
-from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
+from vllm.model_executor.layers.quantization import QuantizationConfig
 
 from sglang.srt.layers.quantization import get_quantization_config
 
