@@ -164,7 +164,15 @@ class QKVParallelLinearWithLoRA(ColumnParallelLinearWithLoRA):
             weight_indices=self.weight_indices,
         )
         # FIXME parallelize qkv
-        lora_output = torch.empty_like(base_output)
+        lora_output = torch.empty_like(base_output, device="cuda")
+        # x: (sum_S, r + r + r)
+        # ideal qkv: (num_lora, H_q + H_k + H_v, r)
+        # temp q: (num_lora, H_q, r)
+        # temp k: (num_lora, H_k, r)
+        # temp v: (num_lora, H_v, r)
+        # output: (sum_S, H_q + H_k + H_v)
+        # needed:
+        # offset, output_tensor
         # q
         output_dim_q = self.B_buffer_q.shape[-2]
         lora_output[:, :output_dim_q] = self.segment_gemm.run(

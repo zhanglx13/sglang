@@ -411,10 +411,13 @@ class Scheduler:
         if new_batch is not None:
             # Run a new prefill batch
             # replace run_batch with the uncommented line to use pytorch profiler
-            # result = pytorch_profile(
-            #     "profile_prefill_step", self.run_batch, new_batch, data_size=len(new_batch.reqs)
-            # )
-            result = self.run_batch(new_batch)
+            result = pytorch_profile(
+                "profile_prefill_step",
+                self.run_batch,
+                new_batch,
+                data_size=len(new_batch.reqs),
+            )
+            # result = self.run_batch(new_batch)
             self.process_batch_result(new_batch, result)
         else:
             if self.running_batch is not None:
@@ -424,13 +427,13 @@ class Scheduler:
 
                     if batch:
                         # replace run_batch with the uncommented line to use pytorch profiler
-                        # result = pytorch_profile(
-                        #     "profile_decode_step",
-                        #     self.run_batch,
-                        #     batch,
-                        #     data_size=len(batch.reqs),
-                        # )
-                        result = self.run_batch(batch)
+                        result = pytorch_profile(
+                            "profile_decode_step",
+                            self.run_batch,
+                            batch,
+                            data_size=len(batch.reqs),
+                        )
+                        # result = self.run_batch(batch)
                         self.process_batch_result(batch, result)
 
                     if self.running_batch is None:

@@ -36,7 +36,6 @@ for dirname in glob.glob(os.path.join(dirpath, "trace*")):
             step = match.group(2)
         else:
             raise Exception(f"Cannot parse {filename}")
-
         try:
             with open(filename, "r") as f:
                 trace = json.load(f)
@@ -44,7 +43,6 @@ for dirname in glob.glob(os.path.join(dirpath, "trace*")):
             clean_json_file(filename, filename)
             with open(filename, "r") as f:
                 trace = json.load(f)
-
         for event in trace["traceEvents"]:
             name = event["name"]
             if name in ["profile_prefill_step", "profile_decode_step"]:
