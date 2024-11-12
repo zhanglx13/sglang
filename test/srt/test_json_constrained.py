@@ -36,7 +36,12 @@ class TestJSONConstrained(unittest.TestCase):
             cls.model,
             cls.base_url,
             timeout=300,
-            other_args=["--max-running-requests", "10"],
+            other_args=[
+                "--max-running-requests",
+                "10",
+                "--grammar-backend",
+                "xgrammar",
+            ],
         )
 
     @classmethod
