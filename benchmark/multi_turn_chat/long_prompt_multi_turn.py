@@ -7,7 +7,7 @@ import time
 from argparse import ArgumentParser
 
 import sglang as sgl
-from sglang.srt.hf_transformers_utils import get_tokenize
+from sglang.srt.hf_transformers_utils import get_tokenizer
 from sglang.test.test_utils import (
     add_common_sglang_args_and_parse,
     select_sglang_backend,
