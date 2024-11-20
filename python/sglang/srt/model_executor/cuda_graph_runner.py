@@ -352,13 +352,13 @@ class CudaGraphRunner:
             self.global_num_tokens[:] = [bs] * self.tp_size
 
         # Attention backend
-        self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
-            bs,
-            self.req_pool_indices,
-            self.seq_lens,
-            forward_batch.seq_lens_sum + (bs - raw_bs),
-            self.encoder_lens,
-        )
+        # self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
+        #     bs,
+        #     self.req_pool_indices,
+        #     self.seq_lens,
+        #     forward_batch.seq_lens_sum + (bs - raw_bs),
+        #     self.encoder_lens,
+        # )
 
         # Replay
         self.graphs[bs].replay()

@@ -156,9 +156,6 @@ class TpModelWorkerClient:
         return logits_output, next_token_ids
 
     def forward_batch_generation(self, model_worker_batch: ModelWorkerBatch):
-        # A cuda stream sync here to avoid the cuda illegal memory access error.
-        torch.cuda.current_stream().synchronize()
-
         # Create a new copy of sampling_info because it will be updated in-place by the scheduler for the next batch.
         sampling_info = model_worker_batch.sampling_info
         sampling_info.update_penalties()
@@ -168,6 +165,26 @@ class TpModelWorkerClient:
             scaling_penalties=sampling_info.scaling_penalties,
             linear_penalties=sampling_info.linear_penalties,
         )
+
+        if model_worker_batch.forward_mode.is_decode():
+            model_runner = self.worker.model_runner
+            bs = len(model_worker_batch.seq_lens)
+            assert bs in [1, 2, 4, 8, 16, 32, 64], f"{bs=}"
+            cuda_graph_runner = model_runner.cuda_graph_runner
+            cuda_graph_runner.req_pool_indices[:bs].copy_(
+                model_worker_batch.req_pool_indices
+            )
+            cuda_graph_runner.seq_lens[:bs].copy_(model_worker_batch.seq_lens)
+            model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
+                bs,
+                cuda_graph_runner.req_pool_indices,
+                cuda_graph_runner.seq_lens,
+                model_worker_batch.seq_lens_sum,
+                None,
+            )
+
+        # A cuda stream sync here to avoid the cuda illegal memory access error.
+        torch.cuda.current_stream().synchronize()
 
         # Push a new batch to the queue
         self.input_queue.put((model_worker_batch, self.future_token_ids_ct))

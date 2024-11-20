@@ -586,7 +586,7 @@ def _wait_and_warmup(server_args, pipe_finish_writer):
         kill_child_process(include_self=True)
         return
 
-    # logger.info(f"{res.json()=}")
+    logger.info(f"{res.json()=}")
 
     logger.info("The server is fired up and ready to roll!")
     if pipe_finish_writer is not None:
