@@ -4,6 +4,7 @@ from abc import abstractmethod
 from typing import List, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from vllm.distributed import (
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
@@ -22,6 +23,9 @@ from sglang.srt.utils import is_hip
 
 logger = init_logger(__name__)
 
+import vllm.envs as envs
+
+padding_size = 128 if envs.VLLM_MOE_PADDING else 0
 
 class FusedMoEMethodBase(QuantizeMethodBase):
 
@@ -481,6 +485,17 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             layer.a2_scale = None
 
     def process_weights_after_loading(self, layer: Module) -> None:
+
+        if envs.VLLM_MOE_PADDING:
+            layer.w13_weight = torch.nn.Parameter(F.pad(
+                layer.w13_weight.data, (0, padding_size), "constant", 0),
+                                                  requires_grad=False)
+            torch.cuda.empty_cache()
+            layer.w2_weight = torch.nn.Parameter(F.pad(layer.w2_weight.data,
+                                                       (0, padding_size), "constant",
+                                                       0),
+                                                 requires_grad=False)
+            torch.cuda.empty_cache() 
 
         # If checkpoint is fp16 or bfloat16, quantize in place.
         if not self.quant_config.is_checkpoint_fp8_serialized:

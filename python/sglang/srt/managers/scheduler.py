@@ -18,6 +18,7 @@ limitations under the License.
 import json
 import logging
 import os
+import psutil
 import time
 import warnings
 from collections import deque
@@ -26,6 +27,8 @@ from typing import List, Optional, Union
 
 import torch
 import zmq
+
+import itertools
 
 from sglang.global_config import global_config
 from sglang.srt.configs.model_config import ModelConfig
@@ -266,6 +269,7 @@ class Scheduler:
                 ],
                 with_stack=True,
             )
+        #self.group_prefill_count = 1
 
     @torch.inference_mode()
     def event_loop_normal(self):
@@ -546,6 +550,12 @@ class Scheduler:
         ) and self.current_inflight_req is None:
             return None
 
+        #if len(self.waiting_queue) < self.group_prefill_count:
+        #    self.group_prefill_count -= 1
+        #    if self.group_prefill_count < 1:
+        #        self.group_prefill_count = 1
+        #    return None
+
         running_bs = len(self.running_batch.reqs) if self.running_batch else 0
         if running_bs >= self.max_running_requests:
             self.batch_is_full = True
@@ -682,6 +692,11 @@ class Scheduler:
         else:
             new_batch.decoding_reqs = None
 
+        #self.group_prefill_count *= 2
+        #if self.group_prefill_count > 32:
+        #    self.group_prefill_count = 32
+
+
         return new_batch
 
     def update_running_batch(self):
@@ -727,8 +742,8 @@ class Scheduler:
     def run_batch(self, batch: ScheduleBatch):
         """Run a batch."""
         if self.is_generation:
+            model_worker_batch = batch.get_model_worker_batch()
             if batch.forward_mode.is_decode() or batch.extend_num_tokens != 0:
-                model_worker_batch = batch.get_model_worker_batch()
                 logits_output, next_token_ids = self.tp_worker.forward_batch_generation(
                     model_worker_batch
                 )
@@ -736,10 +751,10 @@ class Scheduler:
                 logits_output = None
                 if self.tokenizer is not None:
                     next_token_ids = torch.full(
-                        (batch.batch_size(),), self.tokenizer.eos_token_id
+                        (batch.batch_size(),), self.tokenizer.eos_token_id, device=self.device
                     )
                 else:
-                    next_token_ids = torch.full((batch.batch_size(),), 0)
+                    next_token_ids = torch.full((batch.batch_size(),), 0, device=self.device)
             batch.output_ids = next_token_ids
             ret = logits_output, next_token_ids, model_worker_batch.bid
         else:  # embedding or reward model
@@ -1123,6 +1138,30 @@ def run_scheduler_process(
     dp_rank: Optional[int],
     pipe_writer,
 ):
+    # cpu affinity
+    pid = os.getpid()
+    p = psutil.Process(pid)
+
+    tp_size_per_node = server_args.tp_size / server_args.nnodes
+
+    total_cores = psutil.cpu_count()
+    num_cores_bind = psutil.cpu_count(logical=False)/tp_size_per_node
+
+    start_cpu_id = int(gpu_id * num_cores_bind)
+    end_cpu_id = int((gpu_id+1) * num_cores_bind)
+
+    if psutil.cpu_count() != psutil.cpu_count(logical=False):
+        upper_part_cpu_ids = [id for id in range(start_cpu_id, end_cpu_id)]
+        lower_part_cpu_ids = [id + total_cores/2 for id in range(start_cpu_id, end_cpu_id)]
+
+        whole_cpu_ids = list(itertools.chain(upper_part_cpu_ids, lower_part_cpu_ids))
+    else:
+        whole_cpu_ids = [id for id in range(start_cpu_id, end_cpu_id)]
+
+    p.cpu_affinity(whole_cpu_ids)
+
+    print(f"Process {pid} gpu_id {gpu_id} is running on CPUs: {p.cpu_affinity()}")
+
     if dp_rank is None:
         configure_logger(server_args, prefix=f" TP{tp_rank}")
     else:

@@ -24,6 +24,7 @@ It supports page size = 1.
 import triton
 import triton.language as tl
 
+from sglang.srt.utils import is_hip
 
 @triton.jit
 def tanh(x):
@@ -419,15 +420,15 @@ def _fwd_grouped_kernel_stage2(
     e_max = tl.zeros([BLOCK_H], dtype=tl.float32) - float("inf")
     e_sum = tl.zeros([BLOCK_H], dtype=tl.float32)
     acc = tl.zeros([BLOCK_H, BLOCK_DMODEL], dtype=tl.float32)
-
-    for start_n in range(0, cur_batch_seq_len, BLOCK_N):
+    log2e = 1.44269504
+    loop_num = tl.cdiv(cur_batch_seq_len, BLOCK_N) - 1
+    #for start_n in range(0, cur_batch_seq_len, BLOCK_N):
+    for start_n in range(0, loop_num*BLOCK_N, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         v_index = tl.load(
             Req_to_tokens
             + cur_batch_req_idx * stride_req_to_token_b
             + (start_n + offs_n),
-            mask=(start_n + offs_n) < cur_batch_seq_len,
-            other=0,
         )
 
         offs_qk = cur_head[:, None] * stride_logic_h + (
@@ -441,8 +442,8 @@ def _fwd_grouped_kernel_stage2(
         )
 
         n_e_max = tl.maximum(tl.max(qk, 1), e_max)
-        old_scale = tl.exp(e_max - n_e_max)
-        p = tl.exp(qk - n_e_max[:, None])
+        old_scale = tl.exp2((e_max - n_e_max)*log2e)
+        p = tl.exp2((qk - n_e_max[:, None])*log2e)
         e_sum = e_sum * old_scale + tl.sum(p, 1)
         v = tl.load(
             v_ptrs + v_index[:, None] * stride_buf_vbs, mask=(offs_d[None, :] < Lv)
@@ -451,7 +452,37 @@ def _fwd_grouped_kernel_stage2(
         acc = acc * old_scale[:, None] + tl.dot(p, v)
         e_max = n_e_max
 
+    start_n = loop_num * BLOCK_N
+    v_index = tl.load(
+        Req_to_tokens
+        + cur_batch_req_idx * stride_req_to_token_b
+        + (start_n + offs_n),
+        mask=(start_n + offs_n) < cur_batch_seq_len,
+        other=0,
+    )
+
+    offs_qk = cur_head[:, None] * stride_logic_h + (
+        cur_batch_start_loc + start_n + offs_n[None, :]
+    )
+
+    qk = tl.load(
+        logits + offs_qk,
+        mask=mask_h[:, None] & (start_n + offs_n[None, :] < cur_batch_seq_len),
+        other=float("-inf"),
+    )
+
+    n_e_max = tl.maximum(tl.max(qk, 1), e_max)
+    old_scale = tl.exp2((e_max - n_e_max)*log2e)
+    p = tl.exp2((qk - n_e_max[:, None])*log2e)
+    e_sum = e_sum * old_scale + tl.sum(p, 1)
+    v = tl.load(
+        v_ptrs + v_index[:, None] * stride_buf_vbs, mask=(offs_d[None, :] < Lv)
+    )
+    p = p.to(v.dtype)
+    acc = acc * old_scale[:, None] + tl.dot(p, v)
+    e_max = n_e_max
     acc = acc / e_sum[:, None]
+
     off_o = cur_batch * stride_obs + cur_head[:, None] * stride_oh + offs_d[None, :]
     out_ptrs = Out + off_o
     tl.store(out_ptrs, acc, mask=(mask_h[:, None]) & (offs_d[None, :] < Lv))
@@ -494,6 +525,12 @@ def _decode_grouped_att_m_fwd(
 
     num_warps = 4
 
+    extra_kargs = {}
+    if is_hip():
+        # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
+        # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
+        extra_kargs = {"waves_per_eu": 4, "matrix_instr_nonkdim": 16, "kpack": 2}
+
     _fwd_grouped_kernel_stage1[grid](
         q,
         k_buffer,
@@ -519,6 +556,7 @@ def _decode_grouped_att_m_fwd(
         num_warps=num_warps,
         num_stages=1,
         Lk=Lk,
+        **extra_kargs,
     )
 
 
@@ -542,6 +580,12 @@ def _decode_grouped_softmax_reducev_fwd(
     Lv = v_buffer.shape[-1]
     BLOCK_DMODEL = triton.next_power_of_2(Lv)
 
+    extra_kargs = {}
+    if is_hip():
+        # https://rocm.docs.amd.com/en/docs-6.2.0/how-to/llm-fine-tuning-optimization/optimizing-triton-kernel.html
+        # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
+        extra_kargs = {"waves_per_eu": 4, "matrix_instr_nonkdim": 16, "kpack": 2}
+
     _fwd_grouped_kernel_stage2[grid](
         logits,
         v_buffer,
@@ -564,6 +608,7 @@ def _decode_grouped_softmax_reducev_fwd(
         Lv=Lv,
         num_warps=num_warps,
         num_stages=1,
+        **extra_kargs,
     )
 
 

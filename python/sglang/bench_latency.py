@@ -74,6 +74,7 @@ from sglang.srt.utils import (
     suppress_other_loggers,
 )
 
+from rpdTracerControl import rpdTracerControl
 
 @dataclasses.dataclass
 class BenchArgs:
@@ -90,6 +91,8 @@ class BenchArgs:
         "select run_name, batch_size, prefill_throughput from results where run_name='before'"
     )
     graph_filename: str = "out.png"
+    enable_prefill_prof: bool = False
+    enable_decode_prof: bool = False
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
@@ -113,6 +116,15 @@ class BenchArgs:
         parser.add_argument(
             "--graph-filename", type=str, default=BenchArgs.graph_filename
         )
+
+        parser.add_argument(
+            "--enable-decode-prof",
+            action='store_true',
+            help="enable decode profiler.")
+        parser.add_argument(
+            "--enable-prefill-prof",
+            action='store_true',
+            help="enable prefill profiler.")
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace):
@@ -300,7 +312,7 @@ def synchronize(device):
 
 
 def latency_test_run_once(
-    run_name, model_runner, rank_print, reqs, batch_size, input_len, output_len, device
+    is_warm_up, enable_prefill_prof, enable_decode_prof, tp_rank, run_name, model_runner, rank_print, reqs, batch_size, input_len, output_len, device
 ):
     max_batch_size = model_runner.max_total_num_tokens // (input_len + output_len)
     if batch_size > max_batch_size:
@@ -325,8 +337,14 @@ def latency_test_run_once(
     # Prefill
     synchronize(device)
     tic = time.time()
+    if enable_prefill_prof and not is_warm_up and tp_rank == 0:
+        print("Start profile Prefill")
+        prefill_profile = rpdTracerControl()
+        prefill_profile.start()
     next_token_ids, _, batch = extend(reqs, model_runner)
     synchronize(device)
+    if enable_prefill_prof and not is_warm_up and tp_rank == 0:
+        prefill_profile.stop()
     prefill_latency = time.time() - tic
     tot_latency += prefill_latency
     throughput = input_len * batch_size / prefill_latency
@@ -338,6 +356,11 @@ def latency_test_run_once(
 
     # Decode
     decode_latencies = []
+    if enable_decode_prof and not is_warm_up and tp_rank == 0:
+        print("Start profile Decode")
+        # Create first instance (this loads the profiler and creates the file)
+        decode_profile = rpdTracerControl()
+        decode_profile.start()
     for i in range(output_len - 1):
         synchronize(device)
         tic = time.time()
@@ -351,6 +374,8 @@ def latency_test_run_once(
             rank_print(
                 f"Decode.  latency: {latency:6.5f} s, throughput: {throughput:9.2f} token/s"
             )
+    if enable_decode_prof and not is_warm_up and tp_rank == 0:
+        decode_profile.stop()
 
     # record decode timing from 2nd output
     if output_len > 1:
@@ -391,6 +416,10 @@ def latency_test(
     # Warm up
     rank_print("Warmup ...")
     latency_test_run_once(
+        True,
+        bench_args.enable_prefill_prof,
+        bench_args.enable_decode_prof,
+        tp_rank,
         bench_args.run_name,
         model_runner,
         rank_print,
@@ -409,6 +438,10 @@ def latency_test(
     ):
         reqs = prepare_synthetic_inputs_for_latency_test(bs, il)
         ret = latency_test_run_once(
+            False,
+            bench_args.enable_prefill_prof,
+            bench_args.enable_decode_prof,
+            tp_rank,
             bench_args.run_name,
             model_runner,
             rank_print,
@@ -491,6 +524,12 @@ def plot_latency_test(
 
 
 def main(server_args, bench_args):
+    if bench_args.enable_prefill_prof or bench_args.enable_decode_prof:
+        # Optionally call this class method before creating first instance
+        rpdTracerControl.setFilename(name = "trace.rpd", append=False)
+
+        # Create first instance (this loads the profiler and creates the file)
+        profile = rpdTracerControl()
     _set_envs_and_config(server_args)
 
     if server_args.model_path:
