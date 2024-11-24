@@ -83,7 +83,7 @@ pub enum Router {
         cache_routing_prob: f32,
         // 2D matrix of (user_id, worker_url) -> counter
         // Initialize with C for all pairs
-        fairness_counter: Arc<Mutex<HashMap<String, HashMap<String, i32>>>>, 
+        fairness_counter: Arc<Mutex<HashMap<String, HashMap<String, i32>>>>,
         fairness_counter_size: usize,
         enable_fairness: bool,
         _eviction_thread: Option<thread::JoinHandle<()>>, // Store thread handle
@@ -100,7 +100,7 @@ pub enum PolicyConfig {
         eviction_interval_secs: u64,
         max_tree_size: usize,
         enable_fairness: bool,
-        fairness_counter_size: usize
+        fairness_counter_size: usize,
     },
 }
 
@@ -139,7 +139,7 @@ impl Router {
                 eviction_interval_secs,
                 max_tree_size,
                 enable_fairness,
-                fairness_counter_size
+                fairness_counter_size,
             } => {
                 let mut running_queue = HashMap::new();
                 for url in &worker_urls {
@@ -254,43 +254,45 @@ impl Router {
             } => {
                 let mut tree = tree.lock().unwrap();
                 let mut running_queue = running_queue.lock().unwrap();
-            
+
                 // Generate a random float between 0 and 1 for probability check
                 let sampled_p: f32 = rand::random();
-            
+
                 let selected_url = if *enable_fairness {
                     // Get the user_id from the request
-                    let user_id = req.headers()
+                    let user_id = req
+                        .headers()
                         .get("uid")
                         .and_then(|h| h.to_str().ok())
                         .unwrap_or("default_uid");
-                    
+
                     let mut fairness_counter = fairness_counter.lock().unwrap();
-                    
+
                     // Initialize counter for new user with `fairness_counter_size` points per worker
                     if !fairness_counter.contains_key(user_id) {
                         let mut worker_counters = HashMap::new();
                         for worker_url in worker_urls.iter() {
-                            worker_counters.insert(worker_url.clone(), *fairness_counter_size as i32);
+                            worker_counters
+                                .insert(worker_url.clone(), *fairness_counter_size as i32);
                         }
                         fairness_counter.insert(user_id.to_string(), worker_counters);
                     }
-            
+
                     // Build prefix map using prefix_match_tenant
                     let mut prefix_map: HashMap<String, String> = HashMap::new();
                     for worker_url in worker_urls.iter() {
                         let prefix = tree.prefix_match_tenant(&text, worker_url);
                         prefix_map.insert(worker_url.clone(), prefix);
                     }
-            
+
                     // Sort workers by prefix length
                     let mut sorted_workers: Vec<_> = prefix_map.into_iter().collect();
                     sorted_workers.sort_by(|(_url1, prefix1), (_url2, prefix2)| {
                         prefix2.len().cmp(&prefix1.len())
                     });
-            
+
                     let mut selected = None;
-            
+
                     // First attempt: try to find worker with highest prefix match and available counter
                     for (worker_url, _prefix) in &sorted_workers {
                         if let Some(worker_counters) = fairness_counter.get_mut(user_id) {
@@ -298,41 +300,49 @@ impl Router {
                                 if count > 0 {
                                     selected = Some(worker_url.clone());
                                     let deduction = text.chars().count();
-                                    worker_counters.insert(worker_url.clone(), count.saturating_sub(deduction as i32));
+                                    worker_counters.insert(
+                                        worker_url.clone(),
+                                        count.saturating_sub(deduction as i32),
+                                    );
                                     break;
                                 }
                             }
                         }
                     }
-            
+
                     // If no worker found, refill counters and try again
                     if selected.is_none() {
                         if let Some(worker_counters) = fairness_counter.get_mut(user_id) {
                             for worker_url in worker_urls.iter() {
-                                worker_counters.insert(worker_url.clone(), *fairness_counter_size as i32);
+                                worker_counters
+                                    .insert(worker_url.clone(), *fairness_counter_size as i32);
                             }
-            
+
                             // Second attempt after refill
                             for (worker_url, _prefix) in &sorted_workers {
                                 if let Some(&count) = worker_counters.get(worker_url) {
                                     if count > 0 {
                                         selected = Some(worker_url.clone());
                                         let deduction = text.chars().count();
-                                        worker_counters.insert(worker_url.clone(), count.saturating_sub(deduction as i32));
+                                        worker_counters.insert(
+                                            worker_url.clone(),
+                                            count.saturating_sub(deduction as i32),
+                                        );
                                         break;
                                     }
                                 }
                             }
                         }
                     }
-            
+
                     selected.unwrap_or_else(|| worker_urls[0].clone())
                 } else {
                     if sampled_p < *cache_routing_prob {
                         // Cache-aware routing logic
                         let (matched_text, matched_worker) = tree.prefix_match(&text);
-                        let matched_rate = matched_text.chars().count() as f32 / text.chars().count() as f32;
-            
+                        let matched_rate =
+                            matched_text.chars().count() as f32 / text.chars().count() as f32;
+
                         if matched_rate > *cache_threshold {
                             matched_worker.to_string()
                         } else {
@@ -347,19 +357,19 @@ impl Router {
                             .unwrap_or_else(|| worker_urls[0].clone())
                     }
                 };
-            
+
                 // Update running queue
                 let count = running_queue.get_mut(&selected_url).unwrap();
                 *count += 1;
-            
+
                 // Update processed queue
                 let mut locked_processed_queue = processed_queue.lock().unwrap();
                 let count = locked_processed_queue.get_mut(&selected_url).unwrap();
                 *count += 1;
-            
+
                 // Update tree with the new request
                 tree.insert(&text, &selected_url);
-            
+
                 selected_url
             }
         };
