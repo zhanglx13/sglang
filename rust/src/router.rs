@@ -84,7 +84,7 @@ pub enum Router {
         // 2D matrix of (user_id, worker_url) -> counter
         // Initialize with C for all pairs
         fairness_counter: Arc<Mutex<HashMap<String, HashMap<String, i32>>>>,
-        fairness_counter_size: usize,
+        fairness_fill_size: usize,
         enable_fairness: bool,
         _eviction_thread: Option<thread::JoinHandle<()>>, // Store thread handle
     },
@@ -100,7 +100,7 @@ pub enum PolicyConfig {
         eviction_interval_secs: u64,
         max_tree_size: usize,
         enable_fairness: bool,
-        fairness_counter_size: usize,
+        fairness_fill_size: usize,
     },
 }
 
@@ -125,6 +125,15 @@ fn get_text_from_request(body: &Bytes, route: &str) -> String {
 
     return "".to_string();
 }
+
+fn get_uid_from_body(body: &Bytes) -> String {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| json.get("user").cloned())
+        .and_then(|uid| uid.as_str().map(String::from))
+        .unwrap_or_else(|| "default_uid".to_string())
+}
+
 impl Router {
     pub fn new(worker_urls: Vec<String>, policy_config: PolicyConfig) -> Self {
         match policy_config {
@@ -139,7 +148,7 @@ impl Router {
                 eviction_interval_secs,
                 max_tree_size,
                 enable_fairness,
-                fairness_counter_size,
+                fairness_fill_size,
             } => {
                 let mut running_queue = HashMap::new();
                 for url in &worker_urls {
@@ -188,7 +197,7 @@ impl Router {
                     cache_routing_prob,
                     fairness_counter,
                     enable_fairness,
-                    fairness_counter_size,
+                    fairness_fill_size,
                     _eviction_thread: Some(eviction_thread),
                 }
             }
@@ -248,7 +257,7 @@ impl Router {
                 cache_threshold,
                 cache_routing_prob,
                 fairness_counter,
-                fairness_counter_size,
+                fairness_fill_size,
                 enable_fairness,
                 ..
             } => {
@@ -259,83 +268,101 @@ impl Router {
                 let sampled_p: f32 = rand::random();
 
                 let selected_url = if *enable_fairness {
-                    // Get the user_id from the request
-                    let user_id = req
-                        .headers()
-                        .get("uid")
-                        .and_then(|h| h.to_str().ok())
-                        .unwrap_or("default_uid");
+
+                    let user_id = get_uid_from_body(&body);
 
                     let mut fairness_counter = fairness_counter.lock().unwrap();
-
-                    // Initialize counter for new user with `fairness_counter_size` points per worker
-                    if !fairness_counter.contains_key(user_id) {
+            
+                    // Initialize counter for new user
+                    if !fairness_counter.contains_key(&user_id) {
                         let mut worker_counters = HashMap::new();
                         for worker_url in worker_urls.iter() {
-                            worker_counters
-                                .insert(worker_url.clone(), *fairness_counter_size as i32);
+                            worker_counters.insert(worker_url.clone(), *fairness_fill_size as i32);
                         }
-                        fairness_counter.insert(user_id.to_string(), worker_counters);
+                        fairness_counter.insert(user_id.to_string(), worker_counters.clone());
+                        
+                        println!(
+                            "[FAIRNESS] New user initialized. user_id: {}, initial_counters: {:?}",
+                            user_id, worker_counters
+                        );
                     }
-
-                    // Build prefix map using prefix_match_tenant
+            
                     let mut prefix_map: HashMap<String, String> = HashMap::new();
                     for worker_url in worker_urls.iter() {
                         let prefix = tree.prefix_match_tenant(&text, worker_url);
                         prefix_map.insert(worker_url.clone(), prefix);
                     }
-
-                    // Sort workers by prefix length
+            
                     let mut sorted_workers: Vec<_> = prefix_map.into_iter().collect();
                     sorted_workers.sort_by(|(_url1, prefix1), (_url2, prefix2)| {
                         prefix2.len().cmp(&prefix1.len())
                     });
-
+            
                     let mut selected = None;
-
-                    // First attempt: try to find worker with highest prefix match and available counter
-                    for (worker_url, _prefix) in &sorted_workers {
-                        if let Some(worker_counters) = fairness_counter.get_mut(user_id) {
-                            if let Some(&count) = worker_counters.get(worker_url) {
-                                if count > 0 {
-                                    selected = Some(worker_url.clone());
-                                    let deduction = text.chars().count();
-                                    worker_counters.insert(
-                                        worker_url.clone(),
-                                        count.saturating_sub(deduction as i32),
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // If no worker found, refill counters and try again
-                    if selected.is_none() {
-                        if let Some(worker_counters) = fairness_counter.get_mut(user_id) {
-                            for worker_url in worker_urls.iter() {
-                                worker_counters
-                                    .insert(worker_url.clone(), *fairness_counter_size as i32);
-                            }
-
-                            // Second attempt after refill
-                            for (worker_url, _prefix) in &sorted_workers {
+            
+                    loop {
+                        // Try to find worker with highest prefix match with available counters
+                        for (worker_url, prefix) in &sorted_workers {
+                            if let Some(worker_counters) = fairness_counter.get_mut(&user_id) {
                                 if let Some(&count) = worker_counters.get(worker_url) {
-                                    if count > 0 {
+                                    let deduction = text.chars().count();
+                                    if count - deduction as i32 > 0 {
                                         selected = Some(worker_url.clone());
-                                        let deduction = text.chars().count();
-                                        worker_counters.insert(
-                                            worker_url.clone(),
-                                            count.saturating_sub(deduction as i32),
+                                        let new_count = count.saturating_sub(deduction as i32);
+                                        worker_counters.insert(worker_url.clone(), new_count);
+                                        
+                                        println!(
+                                            "[FAIRNESS] Worker selected. user_id: {}, worker: {}, prefix_len: {}, prev_count: {}, deduction: {}, new_count: {}",
+                                            user_id, worker_url, prefix.len(), count, deduction, new_count
                                         );
                                         break;
                                     }
                                 }
                             }
                         }
+            
+                        // Refill counters if no available worker found
+                        if selected.is_none() {
+                            if let Some(worker_counters) = fairness_counter.get_mut(&user_id) {
+                                println!(
+                                    "[FAIRNESS] Refilling counters. user_id: {}, previous_counters: {:?}",
+                                    user_id, worker_counters
+                                );
+                                
+                                for worker_url in worker_urls.iter() {
+                                    if let Some(&count) = worker_counters.get(worker_url) {
+                                        let new_count = count + *fairness_fill_size as i32;
+                                        worker_counters.insert(worker_url.clone(), new_count);
+                                        
+                                        println!(
+                                            "[FAIRNESS] Worker refilled. user_id: {}, worker: {}, prev_count: {}, fill_size: {}, new_count: {}",
+                                            user_id, worker_url, count, fairness_fill_size, new_count
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            break;
+                        }
                     }
-
-                    selected.unwrap_or_else(|| worker_urls[0].clone())
+            
+                    let selected_worker = selected.unwrap_or_else(|| {
+                        println!(
+                            "[FAIRNESS] WARNING: Fallback to default worker. user_id: {}, worker: {}",
+                            user_id, &worker_urls[0]
+                        );
+                        worker_urls[0].clone()
+                    });
+            
+                    // Log final counter state
+                    if let Some(worker_counters) = fairness_counter.get(&user_id) {
+                        println!(
+                            "[FAIRNESS] Request complete. user_id: {}, selected_worker: {}, final_counters: {:?}",
+                            user_id, selected_worker, worker_counters
+                        );
+                    }
+            
+                    selected_worker
                 } else {
                     if sampled_p < *cache_routing_prob {
                         // Cache-aware routing logic

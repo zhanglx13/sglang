@@ -1,4 +1,3 @@
-// src/main.rs
 use clap::Parser;
 use clap::ValueEnum;
 
@@ -81,6 +80,23 @@ struct Args {
         help = "Maximum size of the approximation tree for cache-aware routing. Default: 2^24"
     )]
     max_tree_size: usize,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        requires = "policy",
+        required_if_eq("policy", "cache_aware"),
+        help = "Enable fairness control for request distribution. When enabled, uses token-based fairness mechanism"
+    )]
+    enable_fairness: bool,
+
+    #[arg(
+        long,
+        default_value_t = 1024,
+        requires = "enable_fairness",
+        help = "Initial/Refill token allocation size for fairness control (only used when fairness is enabled). Default: 1024"
+    )]
+    fairness_fill_size: usize,
 }
 
 impl Args {
@@ -93,6 +109,8 @@ impl Args {
                 cache_routing_prob: self.cache_routing_prob,
                 eviction_interval_secs: self.eviction_interval_secs,
                 max_tree_size: self.max_tree_size,
+                enable_fairness: self.enable_fairness,
+                fairness_fill_size: self.fairness_fill_size,
             },
         }
     }

@@ -21,6 +21,8 @@ struct Router {
     cache_routing_prob: f32,
     eviction_interval_secs: u64,
     max_tree_size: usize,
+    enable_fairness: bool,
+    fairness_fill_size: usize,
 }
 
 #[pymethods]
@@ -34,7 +36,9 @@ impl Router {
         cache_threshold = 0.50,
         cache_routing_prob = 1.0,
         eviction_interval_secs = 60,
-        max_tree_size = 2usize.pow(24)
+        max_tree_size = 2usize.pow(24),
+        enable_fairness = false,
+        fairness_fill_size = 1024
     ))]
     fn new(
         worker_urls: Vec<String>,
@@ -45,6 +49,8 @@ impl Router {
         cache_routing_prob: f32,
         eviction_interval_secs: u64,
         max_tree_size: usize,
+        enable_fairness: bool,
+        fairness_fill_size: usize,
     ) -> PyResult<Self> {
         Ok(Router {
             host,
@@ -55,6 +61,8 @@ impl Router {
             cache_routing_prob,
             eviction_interval_secs,
             max_tree_size,
+            enable_fairness,
+            fairness_fill_size,
         })
     }
 
@@ -71,6 +79,8 @@ impl Router {
                 cache_routing_prob: self.cache_routing_prob,
                 eviction_interval_secs: self.eviction_interval_secs,
                 max_tree_size: self.max_tree_size,
+                enable_fairness: self.enable_fairness,
+                fairness_fill_size: self.fairness_fill_size,
             },
         };
 

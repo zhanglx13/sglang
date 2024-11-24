@@ -20,6 +20,10 @@ class RouterArgs:
     cache_routing_prob: float = 1.0
     eviction_interval: int = 60
     max_tree_size: int = 2**24
+    
+    # Fairness control
+    enable_fairness: bool = False
+    fairness_fill_size: int = 1024
 
     @staticmethod
     def add_cli_args(
@@ -91,6 +95,20 @@ class RouterArgs:
             default=RouterArgs.max_tree_size,
             help="Maximum size of the approximation tree for cache-aware routing",
         )
+        
+        # Fairness control configuration
+        parser.add_argument(
+            f"--{prefix}enable-fairness",
+            action="store_true",
+            default=RouterArgs.enable_fairness,
+            help="Enable token-based fairness control for request distribution",
+        )
+        parser.add_argument(
+            f"--{prefix}fairness-fill-size",
+            type=int,
+            default=RouterArgs.fairness_fill_size,
+            help="Initial/Refill token allocation size for fairness control (only used when fairness is enabled)",
+        )
 
     @classmethod
     def from_cli_args(
@@ -113,6 +131,8 @@ class RouterArgs:
             cache_routing_prob=getattr(args, f"{prefix}cache_routing_prob"),
             eviction_interval=getattr(args, f"{prefix}eviction_interval"),
             max_tree_size=getattr(args, f"{prefix}max_tree_size"),
+            enable_fairness=getattr(args, f"{prefix}enable_fairness"),
+            fairness_fill_size=getattr(args, f"{prefix}fairness_fill_size"),
         )
 
 
@@ -153,6 +173,8 @@ def launch_router(args: argparse.Namespace) -> Optional[Router]:
             cache_routing_prob=router_args.cache_routing_prob,
             eviction_interval_secs=router_args.eviction_interval,
             max_tree_size=router_args.max_tree_size,
+            enable_fairness=router_args.enable_fairness,
+            fairness_fill_size=router_args.fairness_fill_size,
         )
 
         router.start()
@@ -183,6 +205,7 @@ multi-node setups or when you want to start workers and router separately.
 Examples:
   python -m sglang_router.launch_router --worker-urls http://worker1:8000 http://worker2:8000
   python -m sglang_router.launch_router --worker-urls http://worker1:8000 http://worker2:8000 --cache-threshold 0.7 --cache-routing-prob 0.5
+  python -m sglang_router.launch_router --worker-urls http://worker1:8000 http://worker2:8000 --enable-fairness --fairness-fill-size 2000
 
     """,
         formatter_class=CustomHelpFormatter,
