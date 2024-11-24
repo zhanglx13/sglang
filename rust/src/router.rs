@@ -306,7 +306,7 @@ impl Router {
                             if let Some(worker_counters) = fairness_counter.get_mut(&user_id) {
                                 if let Some(&count) = worker_counters.get(worker_url) {
                                     let deduction = text.chars().count();
-                                    if count - deduction as i32 > 0 {
+                                    if count > 0 {
                                         selected = Some(worker_url.clone());
                                         let new_count = count.saturating_sub(deduction as i32);
                                         worker_counters.insert(worker_url.clone(), new_count);
