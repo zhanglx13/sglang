@@ -81,6 +81,10 @@ pub enum Router {
         processed_queue: Arc<Mutex<HashMap<String, usize>>>,
         cache_threshold: f32,
         cache_routing_prob: f32,
+        // 2D matrix of (user_id, worker_url) -> counter
+        // Initialize with C for all pairs
+        fairness_counter: Arc<Mutex<HashMap<String, HashMap<String, usize>>>>, 
+        enable_fairness: bool,
         _eviction_thread: Option<thread::JoinHandle<()>>, // Store thread handle
     },
 }
@@ -94,6 +98,7 @@ pub enum PolicyConfig {
         cache_routing_prob: f32,
         eviction_interval_secs: u64,
         max_tree_size: usize,
+        enable_fairness: bool,
     },
 }
 
@@ -131,6 +136,7 @@ impl Router {
                 cache_routing_prob,
                 eviction_interval_secs,
                 max_tree_size,
+                enable_fairness
             } => {
                 let mut running_queue = HashMap::new();
                 for url in &worker_urls {
@@ -168,6 +174,8 @@ impl Router {
                     tree.lock().unwrap().insert(&"".to_string(), url);
                 }
 
+                let fairness_counter = Arc::new(Mutex::new(HashMap::new()));
+
                 Router::CacheAware {
                     worker_urls,
                     tree,
@@ -175,6 +183,8 @@ impl Router {
                     processed_queue,
                     cache_threshold,
                     cache_routing_prob,
+                    fairness_counter,
+                    enable_fairness,
                     _eviction_thread: Some(eviction_thread),
                 }
             }
@@ -233,6 +243,7 @@ impl Router {
                 processed_queue,
                 cache_threshold,
                 cache_routing_prob,
+                enable_fairness,
                 ..
             } => {
                 // even though the tree is thread-safe, we still put a lock to ensure the whole op (tree read + queue read + tree write + queue write) is atomic to handle some edge cases (e.g. multiple requests with long prefix entering at the same time)
@@ -243,34 +254,42 @@ impl Router {
                 // Generate a random float between 0 and 1 for probability check
                 let sampled_p: f32 = rand::random();
 
-                let selected_url = if sampled_p < *cache_routing_prob {
-                    // Cache-aware routing logic
-                    let (matched_text, matched_worker) = tree.prefix_match(&text);
-                    let matched_rate =
-                        matched_text.chars().count() as f32 / text.chars().count() as f32;
+                if *enable_fairness == true {
+                    // Get the user_id from the request
+                    let user_id = req.headers().get("uid").and_then(|h| h.to_str().ok()).unwrap_or("default_uid");
+                    // TODO: declare "prefix_map", key is tenant, value prefix
 
-                    if matched_rate > *cache_threshold {
-                        matched_worker.to_string()
-                    } else {
-                        // For Debug
-                        // let m_map: HashMap<String, usize> = tree
-                        //     .tenant_char_count
-                        //     .iter()
-                        //     .map(|entry| (entry.key().clone(), *entry.value()))
-                        //     .collect();
-
-                        // println!("map: {:?}, mmap: {:?}", tree.get_tenant_char_count(), m_map);
-
-                        tree.get_smallest_tenant()
+                    // TODO: iterate all workers over tree.prefix_match_tenant 
+                    for worker_url in worker_urls.iter() {
+                        // TODO
                     }
+
+                    // TODO:
+                    // 1. Sort the map by the len of prefix
+                    // 2. If the current worker still has 
+
                 } else {
-                    // Shortest queue routing logic
-                    running_queue
-                        .iter()
-                        .min_by_key(|(_url, &count)| count)
-                        .map(|(url, _)| url.clone())
-                        .unwrap_or_else(|| worker_urls[0].clone())
-                };
+                    let selected_url = if sampled_p < *cache_routing_prob {
+                        // Cache-aware routing logic
+                        let (matched_text, matched_worker) = tree.prefix_match(&text);
+                        let matched_rate =
+                            matched_text.chars().count() as f32 / text.chars().count() as f32;
+    
+                        if matched_rate > *cache_threshold {
+                            matched_worker.to_string()
+                        } else {
+                            tree.get_smallest_tenant()
+                        }
+                    } else {
+                        // Shortest queue routing logic
+                        running_queue
+                            .iter()
+                            .min_by_key(|(_url, &count)| count)
+                            .map(|(url, _)| url.clone())
+                            .unwrap_or_else(|| worker_urls[0].clone())
+                    };
+                }
+
 
                 // Update running queue
                 let count = running_queue.get_mut(&selected_url).unwrap();
