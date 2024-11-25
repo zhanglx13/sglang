@@ -11,7 +11,7 @@ from sglang.test.test_utils import (
     DEFAULT_URL_FOR_TEST,
 )
 import sglang as sgl
-
+import gc
 mp.set_start_method("spawn", force=True)
 
 def mock_init_parameter_update_group(
@@ -40,6 +40,8 @@ class TestParameterUpdateGroup(unittest.TestCase):
 
         if rank == 0:
             # Rank 0: 加载HF模型
+            os.environ["NCCL_CUMEM_ENABLE"] = "0"
+            os.environ["NCCL_NVLS_ENABLE"] = "0"
             hf_model = AutoModelForCausalLM.from_pretrained(model_name).to("cuda:0")
             group = init_custom_process_group(
                 backend="nccl",
@@ -51,6 +53,9 @@ class TestParameterUpdateGroup(unittest.TestCase):
             print("rank 0 begin barrier")
             dist.barrier(group=group)
             print("rank 0 end barrier")
+            del hf_model
+            gc.collect()
+            torch.cuda.empty_cache()
 
         elif rank == 1:
             # Rank 1: 启动SGLang服务器
@@ -67,6 +72,7 @@ class TestParameterUpdateGroup(unittest.TestCase):
             print("rank 1 begin barrier")
             dist.barrier(group=_model_update_group)
             print("rank 1 end barrier")
+            engine.shutdown()
 
     @classmethod
     def setUpClass(cls):
