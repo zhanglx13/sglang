@@ -40,6 +40,8 @@ class TestParameterUpdateGroup(unittest.TestCase):
 
         if rank == 0:
             # Rank 0: 加载HF模型
+            os.environ["NCCL_CUMEM_ENABLE"] = "0"
+            os.environ["NCCL_NVLS_ENABLE"] = "0"
             hf_model = AutoModelForCausalLM.from_pretrained(model_name).to("cuda:0")
             group = init_custom_process_group(
                 backend="nccl",
