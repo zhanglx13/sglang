@@ -987,3 +987,37 @@ def direct_register_custom_op(
     my_lib.impl(op_name, op_func, "CUDA")
     if fake_impl is not None:
         my_lib._register_fake(op_name, fake_impl)
+
+
+def should_use_tensor_cores(
+    kv_cache_dtype: torch.dtype,
+    num_attention_heads: int,
+    num_kv_heads: int,
+    env_override: str = None,
+) -> bool:
+    """
+    Determine whether to use tensor cores for attention computation.
+
+    Args:
+        kv_cache_dtype: Data type of the KV cache
+        num_attention_heads: Number of attention heads
+        num_kv_heads: Number of key/value heads
+        env_override: Environment variable override value (if any)
+
+    Returns:
+        bool: Whether to use tensor cores
+    """
+    # Check environment variable override first
+    if env_override is not None:
+        return env_override.lower() == "true"
+
+    # Calculate GQA group size
+    gqa_group_size = num_attention_heads // num_kv_heads
+
+    # Determine based on dtype and GQA group size
+    if kv_cache_dtype == torch.float8_e4m3fn:
+        return True
+    elif kv_cache_dtype == torch.float16:
+        return gqa_group_size > 4
+    else:
+        return False

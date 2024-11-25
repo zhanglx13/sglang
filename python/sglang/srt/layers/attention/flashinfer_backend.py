@@ -18,7 +18,7 @@ import triton.language as tl
 from sglang.global_config import global_config
 from sglang.srt.layers.attention import AttentionBackend
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.utils import is_flashinfer_available
+from sglang.srt.utils import is_flashinfer_available, should_use_tensor_cores
 
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
@@ -31,7 +31,6 @@ if is_flashinfer_available():
         BatchPrefillWithRaggedKVCacheWrapper,
     )
     from flashinfer.cascade import merge_state
-    from flashinfer.decode import _grouped_size_compiled_for_decode_kernels
 
 
 class WrapperDispatch(Enum):
@@ -45,19 +44,14 @@ class FlashInferAttnBackend(AttentionBackend):
     def __init__(self, model_runner: ModelRunner):
         super().__init__()
 
-        # Parse constants
-        if "SGLANG_FLASHINFER_USE_TENSOR_CORE" in os.environ:
-            self.decode_use_tensor_cores = (
-                os.environ["SGLANG_FLASHINFER_USE_TENSOR_CORE"].lower() == "true"
-            )
-        else:
-            if not _grouped_size_compiled_for_decode_kernels(
-                model_runner.model_config.num_attention_heads // model_runner.tp_size,
-                model_runner.model_config.get_num_kv_heads(model_runner.tp_size),
-            ):
-                self.decode_use_tensor_cores = True
-            else:
-                self.decode_use_tensor_cores = False
+        env_override = os.environ.get("SGLANG_FLASHINFER_USE_TENSOR_CORE")
+
+        self.decode_use_tensor_cores = should_use_tensor_cores(
+            kv_cache_dtype=model_runner.kv_cache_dtype,
+            num_attention_heads=model_runner.model_config.num_attention_heads,
+            num_kv_heads=model_runner.model_config.get_num_kv_heads(1),
+            env_override=env_override,
+        )
 
         self.max_context_len = model_runner.model_config.context_len
 
