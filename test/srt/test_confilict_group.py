@@ -1,22 +1,26 @@
+import gc
 import os
 import time
 import unittest
+
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from transformers import AutoModelForCausalLM
+
+import sglang as sgl
 from sglang.srt.utils import init_custom_process_group
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_URL_FOR_TEST,
 )
-import sglang as sgl
-import gc
+
 mp.set_start_method("spawn", force=True)
 
+
 def mock_init_parameter_update_group(
-        master_address, master_port, rank_offset, world_size, 
-        group_name, backend="nccl"):
+    master_address, master_port, rank_offset, world_size, group_name, backend="nccl"
+):
     """初始化模型参数更新的进程组"""
     rank = rank_offset + 0
     try:
@@ -30,6 +34,7 @@ def mock_init_parameter_update_group(
         return _model_update_group, "Succeeded to initialize custom process group."
     except Exception as e:
         return False, f"Failed to initialize custom process group: {e}."
+
 
 class TestParameterUpdateGroup(unittest.TestCase):
     @classmethod
@@ -79,7 +84,7 @@ class TestParameterUpdateGroup(unittest.TestCase):
         cls.world_size = 2
         cls.model_name = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
         cls.base_url = DEFAULT_URL_FOR_TEST
-        
+
         mp.spawn(
             cls.init_process,
             args=(cls.world_size, cls.base_url, cls.model_name),
@@ -94,7 +99,10 @@ class TestParameterUpdateGroup(unittest.TestCase):
         time.sleep(1)
 
     def test_init_parameter_update_group(self):
-        print("Successfully initialized parameter update group between huggingface and SGLang server.")
+        print(
+            "Successfully initialized parameter update group between huggingface and SGLang server."
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
