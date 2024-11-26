@@ -38,7 +38,14 @@ def tanh(x):
     return 2 * tl.sigmoid(2 * x) - 1
 
 
-@triton.jit
+def _fwd_kernel_repr(specialization):
+    signature = specialization.signature
+    constants = specialization.constants
+    blocks = "x".join([f"{constants[i]}" for i in ["Lq", "Lv", "BLOCK_DMODEL", "BLOCK_DPE", "BLOCK_DV", "BLOCK_M", "BLOCK_N"]])
+    return f"extend_attn_fwd_kernel_{blocks}"
+
+
+@triton.jit(repr=_fwd_kernel_repr)
 def _fwd_kernel(
     Q_Extend,
     K_Extend,
@@ -314,7 +321,9 @@ def extend_attention_fwd(
 
     extra_kargs = {}
     if is_hip():
+        #num_warps = 4
         extra_kargs = {"waves_per_eu": 4, "matrix_instr_nonkdim": 16, "kpack": 2}
+        #extra_kargs = {"waves_per_eu": 2, "matrix_instr_nonkdim": 32, "kpack": 1}
 
     _fwd_kernel[grid](
         q_extend,

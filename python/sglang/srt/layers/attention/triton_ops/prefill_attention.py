@@ -29,7 +29,14 @@ if is_cuda_available:
     CUDA_CAPABILITY = torch.cuda.get_device_capability()
 
 
-@triton.jit
+def _fwd_kernel_repr(specialization):
+    signature = specialization.signature
+    constants = specialization.constants
+    blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_M", "BLOCK_DMODEL", "BLOCK_N", "Lk"]])
+    return f"prefill_attn_fwd_kernel_{blocks}"
+
+
+@triton.jit(repr=_fwd_kernel_repr)
 def _fwd_kernel(
     Q,
     K,
