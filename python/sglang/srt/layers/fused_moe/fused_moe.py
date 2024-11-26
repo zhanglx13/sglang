@@ -17,8 +17,25 @@ logger = init_logger(__name__)
 
 padding_size = 128 if envs.VLLM_MOE_PADDING else 0
 
+def _moe_repr_nokmask(specialization):
+    signature = specialization.signature
+    constants = specialization.constants
+    blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_SIZE_M", "BLOCK_SIZE_N", "BLOCK_SIZE_K"]])
+    sizes = "x".join([f"{constants[i]}" for i in ["EM", "N", "K", "num_valid_tokens", "top_k"]])
+    strides = "x".join([f"{constants[i]}" for i in ["stride_am", "stride_ak", "stride_be", "stride_bk", "stride_bn", "stride_cm", "stride_cn"]])
+    return f"fused_moe_kernel_nomask_shape{sizes}_tile{blocks}_stride{strides}"
 
-@triton.jit
+
+def _moe_repr(specialization):
+    signature = specialization.signature
+    constants = specialization.constants
+    blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_SIZE_M", "BLOCK_SIZE_N", "BLOCK_SIZE_K"]])
+    sizes = "x".join([f"{constants[i]}" for i in ["EM", "N", "K", "num_valid_tokens"]])
+    strides = "x".join([f"{constants[i]}" for i in ["stride_am", "stride_ak", "stride_be", "stride_bk", "stride_bn", "stride_cm", "stride_cn"]])
+    return f"fused_moe_kernel_shape{sizes}_tile{blocks}_stride{strides}"
+
+
+@triton.jit(repr=_moe_repr_nokmask)
 def fused_moe_kernel_nokmask(
     # Pointers to matrices
     a_ptr,
@@ -31,21 +48,21 @@ def fused_moe_kernel_nokmask(
     expert_ids_ptr,
     num_tokens_post_padded_ptr,
     # Matrix dimensions
-    N,
-    K,
-    EM,
-    num_valid_tokens,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    EM: tl.constexpr,
+    num_valid_tokens: tl.constexpr,
     # The stride variables represent how much to increase the ptr by when
     # moving by 1 element in a particular dimension. E.g. `stride_am` is
     # how much to increase `a_ptr` by to get the element one row down
     # (A has M rows).
-    stride_am,
-    stride_ak,
-    stride_be,
-    stride_bk,
-    stride_bn,
-    stride_cm,
-    stride_cn,
+    stride_am: tl.constexpr,
+    stride_ak: tl.constexpr,
+    stride_be: tl.constexpr,
+    stride_bk: tl.constexpr,
+    stride_bn: tl.constexpr,
+    stride_cm: tl.constexpr,
+    stride_cn: tl.constexpr,
     # Meta-parameters
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -94,6 +111,18 @@ def fused_moe_kernel_nokmask(
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
+
+    tl.assume(stride_am > 0)
+    tl.assume(stride_ak > 0)
+    tl.assume(stride_be > 0)
+    tl.assume(stride_bk > 0)
+    tl.assume(stride_bn > 0)
+    tl.assume(stride_cm > 0)
+    tl.assume(stride_cn > 0)
+
+    tl.assume(pid_m >= 0)
+    tl.assume(pid_n >= 0)
+
 
     # ----------------------------------------------------------
     # Create pointers for the first blocks of A and B.
@@ -155,7 +184,7 @@ def fused_moe_kernel_nokmask(
         accumulator = accumulator * moe_weight[:, None]
 
     if use_fp8:
-        accumulator = (accumulator * a_scale * b_scale).to(compute_type)
+        accumulator = (accumulator * a_scale * b_scale).to(compute_type, "rtz")
     else:
         accumulator = accumulator.to(compute_type)
     # -----------------------------------------------------------
@@ -165,7 +194,7 @@ def fused_moe_kernel_nokmask(
     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
     tl.store(c_ptrs, accumulator, mask=c_mask)
 
-@triton.jit
+@triton.jit(repr=_moe_repr)
 def fused_moe_kernel(
     # Pointers to matrices
     a_ptr,
@@ -178,21 +207,21 @@ def fused_moe_kernel(
     expert_ids_ptr,
     num_tokens_post_padded_ptr,
     # Matrix dimensions
-    N,
-    K,
-    EM,
-    num_valid_tokens,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    EM: tl.constexpr,
+    num_valid_tokens: tl.constexpr,
     # The stride variables represent how much to increase the ptr by when
     # moving by 1 element in a particular dimension. E.g. `stride_am` is
     # how much to increase `a_ptr` by to get the element one row down
     # (A has M rows).
-    stride_am,
-    stride_ak,
-    stride_be,
-    stride_bk,
-    stride_bn,
-    stride_cm,
-    stride_cn,
+    stride_am: tl.constexpr,
+    stride_ak: tl.constexpr,
+    stride_be: tl.constexpr,
+    stride_bk: tl.constexpr,
+    stride_bn: tl.constexpr,
+    stride_cm: tl.constexpr,
+    stride_cn: tl.constexpr,
     # Meta-parameters
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
