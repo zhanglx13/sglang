@@ -749,6 +749,11 @@ def fused_experts(
             curr_topk_ids, config["BLOCK_SIZE_M"], E
         )
 
+        if False:
+            print(f"### Calling fused_experts ###")
+            print(f"{sorted_token_ids.shape=}  {expert_ids.shape=}  {num_tokens_post_padded.shape=}")
+            print(f"first moe kernel tensor shapes: {curr_hidden_states.shape=}  {w1.shape=}  {intermediate_cache1.shape=}")
+
         invoke_fused_moe_kernel(
             curr_hidden_states,
             w1,
@@ -769,6 +774,8 @@ def fused_experts(
 
         ops.gelu_and_mul(intermediate_cache2, intermediate_cache1.view(-1, N))
 
+        if False:
+            print(f"Second moe kernel tensor shapes: {intermediate_cache2.shape=}  {w2.shape=}  {intermediate_cache3.shape=}")
         invoke_fused_moe_kernel(
             intermediate_cache2,
             w2,
