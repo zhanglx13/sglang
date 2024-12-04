@@ -164,11 +164,8 @@ def fused_moe_kernel_nokmask(
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the
         # K dimension.
-        a = tl.load(
-            a_ptrs,
-            mask=token_mask[:, None],
-            other=0.0,
-        )
+        #a = tl.load(a_ptrs, mask=token_mask[:, None], other=0.0)
+        a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
         # We accumulate along the K dimension.
         if use_fp8:
